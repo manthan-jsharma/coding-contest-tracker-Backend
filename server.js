@@ -6,15 +6,29 @@ import { JSDOM } from "jsdom";
 import cron from "node-cron";
 import dotenv from "dotenv";
 import axios from "axios";
-import cheerio from "cheerio";
+import * as cheerio from "cheerio";
+// const { google } = require("googleapis");
+import google from "googleapis";
+import bodyParser from "body-parser";
+
+const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY;
+
+const channelId = "UCqL-fzHtN3NQPbYqGymMbTA";
 
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-app.use(cors());
+app.use(
+  cors({
+    origin: "http://localhost:3000", // Allow requests from this origin
+    methods: "GET,HEAD,PUT,PATCH,POST,DELETE", // Allow these methods
+    headers: "Content-Type, Accept", // Allow these headers
+  })
+);
 app.use(express.json());
+app.use(bodyParser.json());
 
 mongoose
   .connect(process.env.MONGODB_URI)
@@ -34,7 +48,9 @@ const contestSchema = new mongoose.Schema(
     startTime: { type: Date, required: true },
     endTime: { type: Date },
     duration: { type: Number }, // in seconds
+    youtubeUrl: { type: String },
   },
+
   { timestamps: true }
 );
 
@@ -75,6 +91,25 @@ app.get("/api/contests/:platform", async (req, res) => {
   } catch (error) {
     console.error(`Error fetching ${req.params.platform} contests:`, error);
     res.status(500).json({ error: "Failed to fetch contests" });
+  }
+});
+
+app.get("/api/contests/:id/youtube", async (req, res) => {
+  const contestId = req.params.id;
+  const contest = await Contest.findById(contestId);
+  if (!contest) {
+    return res.status(404).json({ message: "Contest not found" });
+  }
+  try {
+    const youtubeLinks = await fetchYoutubeLinks(
+      contest.name,
+      contest.platform
+    );
+    console.log("Fetched YouTube URLs:", youtubeLinks);
+    res.json(youtubeLinks);
+  } catch (error) {
+    console.error("Error fetching YouTube URLs:", error);
+    res.status(500).json({ message: "Error fetching YouTube URLs" });
   }
 });
 
@@ -185,7 +220,13 @@ async function fetchLeetCodeContests() {
   try {
     console.log("Fetching LeetCode contests...");
     // LeetCode doesn't have a public API for contests, so we'll use web scraping
-    const response = await axios.get("https://leetcode.com/contest/");
+    const response = await axios.get("https://leetcode.com/contest/", {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 12_4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/101.0.4951.54 Safari/537.36",
+      },
+    });
+
     const $ = cheerio.load(response.data);
 
     const contests = [];
@@ -306,6 +347,17 @@ async function fetchLeetCodeContests() {
     console.error("Error fetching LeetCode contests:", error);
     return [];
   }
+}
+
+async function fetchYoutubeLinks(contestName, platform) {
+  const searchQuery = `${contestName} ${platform} explanation`;
+  const response = await axios.get(
+    `https://www.googleapis.com/youtube/v3/search?part=id,snippet&channelId=${channelId}&q=${searchQuery}&type=video&key=${YOUTUBE_API_KEY}`
+  );
+  const videoLinks = response.data.items.map(
+    (item) => `https://www.youtube.com/watch?v=${item.id.videoId}`
+  );
+  return videoLinks;
 }
 
 // Update contests in the database
